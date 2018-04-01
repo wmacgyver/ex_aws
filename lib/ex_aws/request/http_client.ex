@@ -1,13 +1,11 @@
 defmodule ExAws.Request.HttpClient do
-  use Behaviour
-
   @moduledoc """
   Specifies expected behaviour of an http client
 
   ExAws allows you to use your http client of choice, provided that
   it can be coerced into complying with this module's specification.
 
-  HTTPoison fits this spec without modification, and is also the default.
+  The default is :hackney.
 
   ## Example
   Here for example is the code required to make HTTPotion comply with this spec.
@@ -30,7 +28,7 @@ defmodule ExAws.Request.HttpClient do
   """
 
   @type http_method :: :get | :post | :put | :delete
-  defcallback request(method :: http_method, url :: binary, req_body :: binary, headers :: [{binary, binary}, ...]) ::
+  @callback request(method :: http_method, url :: binary, req_body :: binary, headers :: [{binary, binary}, ...], http_opts :: term) ::
     {:ok, %{status_code: pos_integer, body: binary}} |
     {:error, %{reason: any}}
 end

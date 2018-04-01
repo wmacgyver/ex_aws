@@ -1,50 +1,45 @@
 ExAws
 =====
+[![Hex.pm](https://img.shields.io/hexpm/v/ex_aws.svg)](https://hex.pm/packages/ex_aws)
+[![Build Docs](https://img.shields.io/badge/hexdocs-release-blue.svg)](https://hexdocs.pm/ex_aws/ExAws.html)
 [![Build Status](https://travis-ci.org/CargoSense/ex_aws.svg?branch=master)](https://travis-ci.org/CargoSense/ex_aws)
 
-A flexible easy to use set of clients AWS APIs.
+A flexible easy to use set of AWS APIs.
 
-## Highlighted Features
-- Easy configuration.
-- Minimal dependencies. Choose your favorite JSON codec and HTTP client.
-- Elixir streams to automatically retrieve paginated resources.
-- Elixir protocols allow easy customization of Dynamo encoding / decoding.
-- `mix kinesis.tail your-stream-name` task for easily watching the contents of a kinesis stream.
-- Simple. ExAws aims to provide a clear and consistent elixir wrapping around AWS APIs, not abstract them away entirely. For every action in a given AWS API there is a corresponding function within the appropriate module. Higher level abstractions like the aforementioned streams are in addition to and not instead of basic API calls.
-- Erlang user? Easily configure erlang friendly module names like `ex_aws_s3` instead of `'Elixir.ExAws.S3'`
+Available Services: https://github.com/ex-aws?q=service&type=&language=
 
-## Getting started
+## Getting Started
 
-Add ex_aws to your mix.exs, along with your json parser and http client of choice. ExAws works out of the box with Poison and HTTPoison and sweet_xml. All APIs require an http client, but only some require a json or xml codec. You only need the codec for the API you intend to use. At this time only SweetXml is supported for xml parsing.
+ExAws v2.0 breaks out every service into its own package. To use the S3 service, you need both the core `:ex_aws` package as well as the `:ex_aws_s3` package.
 
-- Dynamo: json
-- Kinesis: json
-- Lambda: json
-- SQS: xml
-- S3: xml
-
-If you wish to use instance roles to obtain AWS access keys you will need to add a JSON codec whether the particular API requires one or not.
+As with all ExAws services, you'll need a compatible HTTP client (defaults to `:hackney`) and whatever JSON or XML codecs needed by the services you want to use. Consult individual service documentation for details on what each service needs.
 
 ```elixir
-def deps do
+defp deps do
   [
-    ex_aws:    "~> 0.4.10",
-    poison:    "~> 1.2",
-    httpoison: "~> 0.7"
+    {:ex_aws, "~> 2.0"},
+    {:ex_aws_s3, "~> 2.0"},
+    {:hackney, "~> 1.9"},
+    {:sweet_xml, "~> 0.6"},
   ]
 end
 ```
-Don't forget to add :httpoison to your applications list if that's in fact the http client you choose. `:ex_aws` must always be added to your applications list.
 
-```elixir
-def application do
-  [applications: [:ex_aws, :httpoison]]
-end
+With these deps you can use `ExAws` precisely as you're used to:
+
+```
+# make a request (with the default region)
+ExAws.S3.list_objects("my-bucket") |> ExAws.request
+# or specify the region
+ExAws.S3.list_objects("my-bucket") |> ExAws.request(region: "us-west-1")
+
+# some operations support streaming
+ExAws.S3.list_objects("my-bucket") |> ExAws.stream! |> Enum.to_list
 ```
 
-That's it!
+### AWS Key configuration
 
-ExAws has by default the equivalent including the following in your mix.exs
+ExAws requires valid AWS keys in order to work properly. ExAws by default does the equivalent of:
 
 ```elixir
 config :ex_aws,
@@ -52,141 +47,82 @@ config :ex_aws,
   secret_access_key: [{:system, "AWS_SECRET_ACCESS_KEY"}, :instance_role]
 ```
 
-This means it will first look for the AWS standard `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables, and fall back using instance meta-data if those don't exist. You should set those environment variables to your credentials, or configure an instance that this library runs on to have an iam role.
+This means it will try to resolve credentials in order
+* Look for the AWS standard `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables
+* Resolve credentials with IAM
+  * If running inside ECS and a [task role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) has been assigned it will use it
+  * Otherwise it will fall back to the [instance role](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html)
 
-## Usage
-
-ExAws ships with a default client for each API:
-`[ExAws.Dynamo, ExAws.Kinesis, ExAws.Lambda, ExAws.S3]`
-
-For particular usage instructions, please consult the client definition for your desired service.
-- [ExAws.Dynamo.Client](http://hexdocs.pm/ex_aws/ExAws.Dynamo.Client.html)
-- [ExAws.Kinesis.Client](http://hexdocs.pm/ex_aws/ExAws.Kinesis.Client.html)
-- [ExAws.Lambda.Client](http://hexdocs.pm/ex_aws/ExAws.Lambda.Client.html)
-- [ExAws.S3.Client](http://hexdocs.pm/ex_aws/ExAws.S3.Client.html)
-
-Dynamo usage example:
+AWS CLI config files are supported, but require an additional dependency:
 
 ```elixir
-defmodule User do
-  @derive [ExAws.Dynamo.Encodable]
-  defstruct [:email, :name, :age, :admin]
-end
-
-alias ExAws.Dynamo
-
-# Create a users table with a primary key of email [String]
-# and 1 unit of read and write capacity
-Dynamo.create_table("Users", "email", %{email: :string}, 1, 1)
-
-user = %User{email: "bubba@foo.com", name: "Bubba", age: 23, admin: false}
-# Save the user
-Dynamo.put_item("Users", user)
-
-# Retrieve the user by email and decode it as a User struct.
-result = Dynamo.get_item!("Users", %{email: user.email})
-|> Dynamo.Decoder.decode(as: User)
-
-assert user == result
+{:configparser_ex, "~> 2.0"}
 ```
 
-Consult the relevant documentation for the API of interest.
+You can then add `{:awscli, "profile_name", timeout}` to the above config and it
+will pull information from `~/.aws/config` and `~/.aws/credentials`
+```elixir
+config :ex_aws,
+  access_key_id: [{:system, "AWS_ACCESS_KEY_ID"}, {:awscli, "default", 30}, :instance_role],
+  secret_access_key: [{:system, "AWS_SECRET_ACCESS_KEY"}, {:awscli, "default", 30}, :instance_role],
+```
 
-## Supported APIs
-- Dynamo
-- Kinesis
-- Lambda
-- SQS
-- S3 (in progress)
-- Many more planned
+### Hackney configuration
 
-## Configuration
+ExAws by default uses [hackney](https://github.com/benoitc/hackney) to make HTTP requests to AWS API. You can modify the options as such:
 
-To configure the built in clients do the following in your config.exs:
+```elixir
+config :ex_aws, :hackney_opts,
+  follow_redirect: true,
+  recv_timeout: 30_000
+```
+
+### AWS Region Configuration.
+
+You can set the region used by default for requests.
 
 ```elixir
 config :ex_aws,
-  region: "us-east-2",
-  dynamodb: [
-    region: "us-west-1"
-  ]
+  region: "us-west-2",
 ```
 
-Top level configuration options (those directly beneath ``:ex_aws`) will automatically apply to all clients, although a given client can override the default. So for example in the above configuration the first `region: "us-east-2"` sets the region for dynamo, kinesis, s3 etc to "us-east-2", but then the particular configuration for dynamo overrides that to "us-west-1".
+## Direct Usage
 
-The following top level configuration options are supported:
-`[:http_client, :json_codec, :access_key_id, :secret_access_key, :debug_requests]`
+ExAws can also be used directly without any specific service module.
 
-## Client configuration
+--TODO--
 
-ExAws easily supports more than one client for a given service. To create your own associated with a particular OTP app:
+## Highlighted Features
+- Easy configuration.
+- Minimal dependencies. Choose your favorite JSON codec and HTTP client.
+- Elixir streams to automatically retrieve paginated resources.
+- Elixir protocols allow easy customization of Dynamo encoding / decoding.
+- `mix aws.kinesis.tail your-stream-name` task for easily watching the contents of a kinesis stream.
+- Simple. ExAws aims to provide a clear and consistent elixir wrapping around AWS APIs, not abstract them away entirely. For every action in a given AWS API there is a corresponding function within the appropriate module. Higher level abstractions like the aforementioned streams are in addition to and not instead of basic API calls.
+
+That's it!
+
+## Retries
+
+ExAws will retry failed AWS API requests using exponential backoff per the "Full
+Jitter" formula described in
+https://www.awsarchitectureblog.com/2015/03/backoff.html
+
+The algorithm uses three values, which are configurable:
 
 ```elixir
-defmodule MyApp.Dynamo do
-  use ExAws.Dynamo.Client, otp_app: :my_app
-end
+# default values shown below
 
-defmodule MyOtherApp.Dynamo do
-  use ExAws.Dynamo.Client, otp_app: :my_other_app
-end
+config :ex_aws, :retries,
+  max_attempts: 10,
+  base_backoff_in_ms: 10,
+  max_backoff_in_ms: 10_000
 ```
 
-To configure:
-```elixir
-config :my_app, :ex_aws,
-  dynamodb: [] # Dynamo config here
+* `max_attempts` is the maximum number of possible attempts with backoffs in between each one
+* `base_backoff_in_ms` corresponds to the `base` value described in the blog post
+* `max_backoff_in_ms` corresponds to the `cap` value described in the blog post
 
-config :my_other_app, :ex_aws,
-  json_codec: ExAws.JSON.JSX # Maybe :my_other_app uses jsx
-  dynamodb: [] # Other Dynamo config here
-```
-
-The association with a particular OTP app is merely for convenience, and is entirely optional. To configure multiple clients without reference to another app simply write your own `config_root/0` in each client to tell ExAws where to find the configuration.
-
-```elixir
-defmodule My.Dynamo do
-  use ExAws.Dynamo.Client
-
-  def config_root do
-    Application.get_all_env(:my_ex_aws)
-  end
-end
-
-defmodule MyOther.Dynamo do
-  use ExAws.Dynamo.Client
-
-  def config_root do
-    Application.get_all_env(:my_other_ex_aws)
-  end
-end
-```
-
-To configure:
-
-```elixir
-config :my_ex_aws,
-  dynamodb: [] # Dynamo config here
-
-config :my_other_ex_aws,
-  json_codec: ExAws.JSON.JSX # Maybe :my_other_app uses jsx
-  dynamodb: [] # Other Dynamo config here
-```
-
-## ExAws vs. Erlcloud
-
-In addition to its unique features, ExAws has a number of advantages over erlcloud in particular:
-
-- Easier configuration. ExAws uses your normal mix config, erlcloud requires you to separately generate a configuration record.
-
-- Guaranteed configuration. Erlcloud requires you to pass in the configuration with every request as an optional last parameter. If you forget, it will use the default configuration which may have unintended consequences. With ExAws clients you set the configuration once and then never worry about it again.
-
-- Binaries and Maps. ExAws always uses binaries over char lists, and returns maps instead of proplists.
-
-- Few built in dependencies. Already using Poison? No need to add jsx as a dependency.
-
-- Lambda support
-
-It's worth noting however that erlcloud supports a substantially larger set of AWS services at this time.
 
 ## License
 
